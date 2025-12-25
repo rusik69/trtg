@@ -1,0 +1,11 @@
+bin/
+downloads/
+*.db
+.env
+.git/
+.gitignore
+README.md
+Makefile
+docker-compose.yml
+.dockerignore
+*.md

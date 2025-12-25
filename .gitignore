@@ -1,0 +1,31 @@
+# Binaries
+bin/
+yttg
+
+# Database
+*.db
+
+# Downloads
+downloads/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.envrc
+prod.env
+
+# Session
+session.json
+
+# Test coverage
+coverage.out
+coverage.html

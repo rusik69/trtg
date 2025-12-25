@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: yttg-postgres
+    environment:
+      - POSTGRES_USER=yttg
+      - POSTGRES_PASSWORD=yttg
+      - POSTGRES_DB=yttg
+      - POSTGRES_HOST_AUTH_METHOD=md5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yttg -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    network_mode: host
+    command: postgres -c listen_addresses=127.0.0.1
+
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: telegram-bot-api
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    network_mode: host
+    restart: unless-stopped
+
+  yttg:
+    build: .
+    container_name: yttg
+    depends_on:
+      postgres:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TELEGRAM_API_URL=http://localhost:8081
+      - TORRENTS_FILE=/app/torrents.txt
+      - DATABASE_URL=postgres://yttg:yttg@127.0.0.1:5432/yttg?sslmode=disable
+      - DOWNLOAD_DIR=/app/downloads
+    volumes:
+      - ./torrents.txt:/app/torrents.txt:ro
+      - yttg-downloads:/app/downloads
+    network_mode: host
+    restart: "no"
+
+  yttg-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: yttg-web
+    depends_on:
+      postgres:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TELEGRAM_API_URL=http://localhost:8081
+      - DATABASE_URL=postgres://yttg:yttg@127.0.0.1:5432/yttg?sslmode=disable
+      - DOWNLOAD_DIR=/app/downloads
+      - PORT=8080
+      - WEB_USERNAME=${WEB_USERNAME:-admin}
+      - WEB_PASSWORD=${WEB_PASSWORD:-admin}
+    volumes:
+      - yttg-downloads:/app/downloads
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  telegram-bot-api-data:
+  postgres-data:
+  yttg-downloads:

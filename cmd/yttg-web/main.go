@@ -17,7 +17,8 @@ func main() {
 	downloadDir := flag.String("download-dir", "", "Download directory for videos (overrides DOWNLOAD_DIR env)")
 	flag.Parse()
 
-	cfg, err := config.NewConfig(true) // Skip Telegram for web interface
+	// Web interface no longer needs Telegram credentials - it uses yttg API instead
+	cfg, err := config.NewConfig(true) // Skip Telegram credentials
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -38,7 +39,7 @@ func main() {
 	defer db.Close()
 
 	// Initialize web server
-	server := web.NewServer(db, cfg.DownloadDir, cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPIURL, cfg.WebUsername, cfg.WebPassword)
+	server := web.NewServer(db, cfg.DownloadDir, cfg.YTTGAPIURL, cfg.WebUsername, cfg.WebPassword, cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPIURL)
 
 	log.Printf("Starting web server on port %s", *port)
 	if err := http.ListenAndServe(":"+*port, server); err != nil {

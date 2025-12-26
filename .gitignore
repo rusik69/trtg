@@ -29,3 +29,6 @@ session.json
 # Test coverage
 coverage.out
 coverage.html
+
+torrents.txt
+.gemini

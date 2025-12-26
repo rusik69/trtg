@@ -18,6 +18,7 @@ type Config struct {
 	TelegramAPIURL string
 	WebUsername    string
 	WebPassword    string
+	YTTGAPIURL     string // URL for yttg download API
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -72,6 +73,11 @@ func NewConfig(skipTelegram bool) (*Config, error) {
 		webPassword = "admin" // Default password (should be changed!)
 	}
 
+	yttgAPIURL := os.Getenv("YTTG_API_URL")
+	if yttgAPIURL == "" {
+		yttgAPIURL = "http://localhost:8082" // Default yttg download API URL
+	}
+
 	return &Config{
 		TorrentsFile:   torrentsFile,
 		DatabaseURL:    dbURL,
@@ -81,6 +87,7 @@ func NewConfig(skipTelegram bool) (*Config, error) {
 		TelegramAPIURL: apiURL,
 		WebUsername:    webUsername,
 		WebPassword:    webPassword,
+		YTTGAPIURL:     yttgAPIURL,
 	}, nil
 }
 

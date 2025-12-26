@@ -13,14 +13,15 @@ import (
 // Video represents a downloaded file record
 // Note: Field names kept for backward compatibility with existing database schema
 type Video struct {
-	ID             int64
-	VideoID        string // Used as torrent URL/ID
-	ChannelURL     string // Used as torrent URL
-	Title          string
-	FilePath       string
-	DownloadedAt   time.Time
-	UploadedAt     *time.Time
-	TelegramFileID string // Telegram file ID for downloading
+	ID               int64
+	VideoID          string // Used as torrent URL/ID
+	ChannelURL       string // Used as torrent URL
+	Title            string
+	FilePath         string
+	DownloadedAt     time.Time
+	UploadedAt       *time.Time
+	TelegramFileID   string // Telegram file ID for downloading
+	TelegramFilePath string // Telegram file path for downloading (for large files)
 }
 
 // DB wraps the PostgreSQL database connection
@@ -82,6 +83,7 @@ func (db *DB) initSchema() error {
 		downloaded_at TIMESTAMP NOT NULL,
 		uploaded_at TIMESTAMP,
 		telegram_file_id TEXT,
+		telegram_file_path TEXT,
 		UNIQUE(video_id, file_path)
 	);
 	CREATE INDEX IF NOT EXISTS idx_videos_video_id ON videos(video_id);
@@ -97,6 +99,9 @@ func (db *DB) initSchema() error {
 	if _, err := db.conn.Exec(schema); err != nil {
 		return fmt.Errorf("failed to initialize database schema: %w", err)
 	}
+
+	// Add telegram_file_path column if it doesn't exist (for large files)
+	_, _ = db.conn.Exec("ALTER TABLE videos ADD COLUMN IF NOT EXISTS telegram_file_path TEXT")
 
 	// Migrate existing VARCHAR(255) columns to TEXT if they exist
 	migrations := []string{
@@ -176,6 +181,18 @@ func (db *DB) UpdateTelegramFileID(videoID, filePath, telegramFileID string) err
 	return nil
 }
 
+// UpdateTelegramFileInfo updates both Telegram file ID and file path for a video
+func (db *DB) UpdateTelegramFileInfo(videoID, filePath, telegramFileID, telegramFilePath string) error {
+	_, err := db.conn.Exec(
+		"UPDATE videos SET telegram_file_id = $1, telegram_file_path = $2 WHERE video_id = $3 AND file_path = $4",
+		telegramFileID, telegramFilePath, videoID, filePath,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update Telegram file info: %w", err)
+	}
+	return nil
+}
+
 // MarkUploaded marks a file/torrent as uploaded to Telegram
 // If filePath is provided, marks that specific file; otherwise marks all files from the torrent
 func (db *DB) MarkUploaded(videoID, filePath string) error {
@@ -226,7 +243,7 @@ func (db *DB) GetPendingUploads() ([]Video, error) {
 // GetAllVideos returns all downloaded files/torrents
 func (db *DB) GetAllVideos() ([]Video, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id FROM videos ORDER BY downloaded_at DESC",
+		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path FROM videos ORDER BY downloaded_at DESC",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query files: %w", err)
@@ -236,15 +253,55 @@ func (db *DB) GetAllVideos() ([]Video, error) {
 	var videos []Video
 	for rows.Next() {
 		var v Video
+		var uploadedAt sql.NullTime
 		var telegramFileID sql.NullString
-		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &v.UploadedAt, &telegramFileID); err != nil {
+		var telegramFilePath sql.NullString
+		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath); err != nil {
 			return nil, fmt.Errorf("failed to scan file row: %w", err)
+		}
+		if uploadedAt.Valid {
+			v.UploadedAt = &uploadedAt.Time
 		}
 		if telegramFileID.Valid {
 			v.TelegramFileID = telegramFileID.String
+		}
+		if telegramFilePath.Valid {
+			v.TelegramFilePath = telegramFilePath.String
 		}
 		videos = append(videos, v)
 	}
 
 	return videos, rows.Err()
+}
+
+// GetVideoByID returns a video by its database ID
+func (db *DB) GetVideoByID(id int64) (*Video, error) {
+	var v Video
+	var uploadedAt sql.NullTime
+	var telegramFileID sql.NullString
+	var telegramFilePath sql.NullString
+
+	err := db.conn.QueryRow(
+		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path FROM videos WHERE id = $1",
+		id,
+	).Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("video not found")
+		}
+		return nil, fmt.Errorf("failed to get video: %w", err)
+	}
+
+	if uploadedAt.Valid {
+		v.UploadedAt = &uploadedAt.Time
+	}
+	if telegramFileID.Valid {
+		v.TelegramFileID = telegramFileID.String
+	}
+	if telegramFilePath.Valid {
+		v.TelegramFilePath = telegramFilePath.String
+	}
+
+	return &v, nil
 }

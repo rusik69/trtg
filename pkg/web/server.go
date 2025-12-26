@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -24,38 +25,48 @@ import (
 
 // Server handles HTTP requests for the web interface
 type Server struct {
-	db          *database.DB
-	downloadDir string
-	uploader    *telegram.Uploader
-	mux         *http.ServeMux
-	username    string
-	password    string
-	sessions    map[string]time.Time
-	sessionsMu  sync.RWMutex
+	db             *database.DB
+	downloadDir    string
+	yttgAPIURL     string // URL for yttg download API (fallback)
+	downloader     *telegram.Downloader
+	mux            *http.ServeMux
+	username       string
+	password       string
+	sessions       map[string]time.Time
+	sessionsMu     sync.RWMutex
+	currentVideo   int64 // Track currently playing video for cleanup
+	currentVideoMu sync.Mutex
+	token          string // Telegram bot token for local file access
 }
 
 // NewServer creates a new web server
-func NewServer(db *database.DB, downloadDir, botToken string, chatID int64, apiURL, username, password string) *Server {
+func NewServer(db *database.DB, downloadDir, yttgAPIURL, username, password, telegramToken string, telegramChatID int64, telegramAPIURL string) *Server {
+	var downloader *telegram.Downloader
+	if telegramToken != "" && telegramAPIURL != "" {
+		var err error
+		downloader, err = telegram.NewDownloader(telegramToken, telegramChatID, telegramAPIURL)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize Telegram downloader for direct streaming: %v", err)
+		} else {
+			log.Printf("Initialized Telegram downloader for direct streaming (API URL: %s)", telegramAPIURL)
+		}
+	}
+
 	s := &Server{
 		db:          db,
 		downloadDir: downloadDir,
+		yttgAPIURL:  yttgAPIURL,
+		downloader:  downloader,
 		mux:         http.NewServeMux(),
 		username:    username,
 		password:    password,
 		sessions:    make(map[string]time.Time),
+		token:       telegramToken,
 	}
 
-	// Initialize Telegram uploader for downloading videos
-	if botToken != "" && chatID != 0 && apiURL != "" {
-		uploader, err := telegram.NewUploader(botToken, chatID, apiURL)
-		if err != nil {
-			log.Printf("Warning: Failed to initialize Telegram uploader: %v", err)
-		} else {
-			s.uploader = uploader
-		}
-	}
+	log.Printf("Initializing web server with yttg API URL: %s", yttgAPIURL)
 
-	// Ensure download directory exists
+	// Ensure download directory exists (for any temporary files if needed)
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		log.Printf("Warning: Failed to create download directory: %v", err)
 	}
@@ -67,8 +78,8 @@ func NewServer(db *database.DB, downloadDir, botToken string, chatID int64, apiU
 	s.mux.HandleFunc("/channel/", s.requireAuth(s.handleChannel))
 	s.mux.HandleFunc("/api/channels", s.requireAuth(s.handleAPIChannels))
 	s.mux.HandleFunc("/api/channel/", s.requireAuth(s.handleAPIChannel))
-	s.mux.HandleFunc("/api/download/", s.requireAuth(s.handleAPIDownload))
 	s.mux.HandleFunc("/api/stream/", s.requireAuth(s.handleAPIStream))
+	s.mux.HandleFunc("/api/status/", s.requireAuth(s.handleAPIStatus))
 	s.mux.HandleFunc("/static/", s.handleStatic)
 
 	// Clean up expired sessions periodically
@@ -163,7 +174,9 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 		* { margin: 0; padding: 0; box-sizing: border-box; }
 		body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a1a; color: #fff; padding: 20px; }
 		.container { max-width: 1400px; margin: 0 auto; }
-		.header { margin-bottom: 30px; }
+		.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; }
+		.logout-btn { background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+		.logout-btn:hover { background: #c82333; }
 		.back-link { color: #4a9eff; text-decoration: none; margin-bottom: 20px; display: inline-block; }
 		h1 { margin-bottom: 10px; }
 		.videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
@@ -194,11 +207,12 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 		</div>
 		<div class="videos" id="videos"></div>
 	</div>
-	<div class="video-player" id="videoPlayer">
+		<div class="video-player" id="videoPlayer">
 		<button class="close-btn" onclick="closePlayer()">×</button>
 		<video id="videoElement" controls autoplay></video>
 	</div>
 	<script>
+		let currentVideoId = null;
 		const channelName = decodeURIComponent('{{.ChannelName}}');
 		document.getElementById('channelName').textContent = channelName;
 		
@@ -233,14 +247,64 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		function playVideo(videoId) {
+			currentVideoId = videoId;
+			
 			const player = document.getElementById('videoPlayer');
 			const video = document.getElementById('videoElement');
-			video.src = '/api/stream/' + videoId;
+			
+			// Clear any previous error state
+			video.src = '';
+			video.load();
+			
+			const statusMsg = document.createElement('div');
+			statusMsg.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 18px; z-index: 1001; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 8px;';
+			statusMsg.textContent = 'Loading video...';
+			player.appendChild(statusMsg);
 			player.classList.add('active');
-			video.play();
+			
+			// Stream directly from yttg (which handles downloads on-demand)
+			const streamUrl = '/api/stream/' + videoId;
+			console.log('Starting stream from:', streamUrl);
+			
+			// Clear previous error handlers
+			video.onerror = null;
+			video.oncanplay = null;
+			
+			// Set up error handler before setting src
+			video.onerror = function(e) {
+				console.error('Video load error:', e, 'src:', video.src, 'error code:', video.error);
+				let errorMsg = 'Failed to load video';
+				if (video.error) {
+					switch(video.error.code) {
+						case 1: errorMsg = 'Video loading aborted'; break;
+						case 2: errorMsg = 'Network error loading video'; break;
+						case 3: errorMsg = 'Video decoding error'; break;
+						case 4: errorMsg = 'Video format not supported'; break;
+					}
+				}
+				statusMsg.textContent = 'Error: ' + errorMsg + '. Please try again.';
+				player.appendChild(statusMsg);
+			};
+			
+			// Set up success handler
+			video.oncanplay = function() {
+				console.log('Video can play, starting playback');
+				statusMsg.remove();
+				video.play().catch(err => {
+					console.error('Play error:', err);
+					statusMsg.textContent = 'Error playing video: ' + err.message;
+					player.appendChild(statusMsg);
+				});
+			};
+			
+			// Set the source and load (yttg will download on-demand)
+			video.src = streamUrl;
+			video.load();
 		}
 		
 		function closePlayer() {
+			currentVideoId = null;
+			
 			const player = document.getElementById('videoPlayer');
 			const video = document.getElementById('videoElement');
 			player.classList.remove('active');
@@ -301,6 +365,13 @@ func (s *Server) handleAPIChannels(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
+
+	log.Printf("handleAPIChannels: Found %d videos in DB", len(videos))
+	for i, v := range videos {
+		log.Printf("Video [%d]: ID=%d, Title='%s', UploadedAt=%v", i, v.ID, v.Title, v.UploadedAt)
+	}
+	log.Printf("handleAPIChannels: Built %d channels", len(channels))
+
 	json.NewEncoder(w).Encode(channels)
 }
 
@@ -371,56 +442,7 @@ func (s *Server) handleAPIChannel(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleAPIDownload downloads a video from Telegram (triggers download for streaming)
-func (s *Server) handleAPIDownload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/download/")
-	if videoIDStr == "" {
-		json.NewEncoder(w).Encode(map[string]string{"error": "Video ID required"})
-		return
-	}
-
-	// Get video from database
-	videos, err := s.db.GetAllVideos()
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-
-	var video *database.Video
-	for _, v := range videos {
-		if v.ID == parseVideoID(videoIDStr) {
-			video = &v
-			break
-		}
-	}
-
-	if video == nil {
-		json.NewEncoder(w).Encode(map[string]string{"error": "Video not found"})
-		return
-	}
-
-	if video.TelegramFileID == "" {
-		json.NewEncoder(w).Encode(map[string]string{"error": "Telegram file ID not available"})
-		return
-	}
-
-	// Check if already cached
-	localPath := filepath.Join(s.downloadDir, fmt.Sprintf("cache_%d_%s", video.ID, filepath.Base(video.FilePath)))
-	if _, err := os.Stat(localPath); err == nil {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "path": localPath})
-		return
-	}
-
-	// Download will happen when streaming, so just return success
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Video will be downloaded when streaming"})
-}
-
-// handleAPIStream streams a video file, downloading from Telegram if needed
+// handleAPIStream proxies video streaming requests to yttg download API
 func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/stream/")
 	if videoIDStr == "" {
@@ -428,7 +450,14 @@ func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get video from database
+	videoID := parseVideoID(videoIDStr)
+
+	// Track current video for cleanup
+	s.currentVideoMu.Lock()
+	s.currentVideo = videoID
+	s.currentVideoMu.Unlock()
+
+	// Verify video exists in database
 	videos, err := s.db.GetAllVideos()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -437,7 +466,7 @@ func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 
 	var video *database.Video
 	for _, v := range videos {
-		if v.ID == parseVideoID(videoIDStr) {
+		if v.ID == videoID {
 			video = &v
 			break
 		}
@@ -453,44 +482,139 @@ func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Download from Telegram if not already cached locally
-	localPath := filepath.Join(s.downloadDir, fmt.Sprintf("cache_%d_%s", video.ID, filepath.Base(video.FilePath)))
+	// Try to serve directly from local disk first (faster and more reliable)
+	if s.token != "" {
+		// Construct expected local path: /var/lib/telegram-bot-api/<TOKEN>/<path_from_db>
+		// The path in DB is relative to the token directory (e.g., "documents/file.mp4")
+		localPath := filepath.Join("/var/lib/telegram-bot-api", s.token, video.TelegramFilePath)
 
-	// Check if already downloaded
-	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		// Download from Telegram
-		if s.uploader == nil {
-			http.Error(w, "Telegram downloader not configured", http.StatusInternalServerError)
+		log.Printf("Checking for local file at: %s", localPath)
+		if _, err := os.Stat(localPath); err == nil {
+			log.Printf("Serving video %d directly from local disk: %s", videoID, localPath)
+			http.ServeFile(w, r, localPath)
 			return
 		}
+		log.Printf("Local file not found at %s (cleaned from cache), will re-download from Telegram", localPath)
+	}
 
-		// Create downloader from uploader's bot
-		downloader, err := telegram.NewDownloaderFromUploader(s.uploader)
+	// File not in cache - need to re-download from Telegram
+	// Download to temporary file first, then stream it
+	if s.downloader != nil {
+		log.Printf("Re-downloading video %d from Telegram (not in cache)", videoID)
+
+		// Create temporary file
+		tmpFile, err := os.CreateTemp(s.downloadDir, fmt.Sprintf("stream-%d-*.mp4", videoID))
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to create downloader: %v", err), http.StatusInternalServerError)
+			log.Printf("Error creating temp file for video %d: %v", videoID, err)
+			http.Error(w, "Failed to create temporary file", http.StatusInternalServerError)
+			return
+		}
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
+		defer os.Remove(tmpPath) // Clean up after streaming
+
+		// Download file from Telegram
+		err = s.downloader.DownloadFileWithPath(video.TelegramFileID, video.TelegramFilePath, tmpPath)
+		if err != nil {
+			log.Printf("Error re-downloading video %d from Telegram: %v", videoID, err)
+			http.Error(w, fmt.Sprintf("Failed to download video from Telegram: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Ensure directory exists
-		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to create cache directory: %v", err), http.StatusInternalServerError)
-			return
-		}
+		log.Printf("Successfully re-downloaded video %d to %s, now streaming", videoID, tmpPath)
+		http.ServeFile(w, r, tmpPath)
+		return
+	}
 
-		// Download file
-		if err := downloader.DownloadFile(video.TelegramFileID, localPath); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to download from Telegram: %v", err), http.StatusInternalServerError)
-			return
+	// No downloader configured - fall back to yttg proxy as last resort
+	targetURL := fmt.Sprintf("%s/download/%d", strings.TrimSuffix(s.yttgAPIURL, "/"), videoID)
+	log.Printf("No downloader configured, proxying stream request for video %d to yttg: %s", videoID, targetURL)
+
+	// Create request
+	req, err := http.NewRequest(r.Method, targetURL, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers (especially Range header for video seeking)
+	for key, values := range r.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
 		}
 	}
 
-	// Set headers for video streaming
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// Make request (no timeout for streaming)
+	client := &http.Client{Timeout: 0}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error proxying video %d: %v", videoID, err)
+		http.Error(w, fmt.Sprintf("Failed to stream video: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
 
-	// Serve video with proper headers for streaming
-	http.ServeFile(w, r, localPath)
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Set status code
+	w.WriteHeader(resp.StatusCode)
+
+	// Stream response body
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Error streaming response for video %d: %v", videoID, err)
+	}
+}
+
+// handleAPIStatus checks if a video is ready for streaming (yttg handles downloads on-demand)
+func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/status/")
+	if videoIDStr == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Video ID required"})
+		return
+	}
+
+	videoID := parseVideoID(videoIDStr)
+
+	// Get video from database
+	videos, err := s.db.GetAllVideos()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	var video *database.Video
+	for _, v := range videos {
+		if v.ID == videoID {
+			video = &v
+			break
+		}
+	}
+
+	if video == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Video not found"})
+		return
+	}
+
+	if video.TelegramFileID == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "error",
+			"ready":  false,
+			"error":  "Telegram file ID not available",
+		})
+		return
+	}
+
+	// yttg handles downloads on-demand, so we can always return ready
+	// The actual download will happen when streaming starts
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ready",
+		"ready":  true,
+	})
 }
 
 // handleStatic serves static files

@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o yttg .
+RUN CGO_ENABLED=0 GOOS=linux go build -o yttg ./cmd/yttg
 
 # Runtime stage
 FROM ubuntu:24.04

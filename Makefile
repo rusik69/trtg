@@ -1,7 +1,7 @@
 .PHONY: build run test clean deps lint docker-build docker-build-web docker-run docker-stop deploy deploy-prune help
 
 REMOTE_HOST := hetzner.govno2.cloud
-REMOTE_USER := root
+REMOTE_USER := ubuntu
 REMOTE_DIR := /opt/trtg
 REMOTE := $(REMOTE_USER)@$(REMOTE_HOST)
 SSH := ssh -6 $(REMOTE)
@@ -60,11 +60,11 @@ stop-local-api:
 
 deploy:
 	@test -f prod.env || (echo "Error: prod.env file not found!" && exit 1)
-	$(SSH) "mkdir -p $(REMOTE_DIR)"
+	$(SSH) "sudo mkdir -p $(REMOTE_DIR) && sudo chown -R $(REMOTE_USER):$(REMOTE_USER) $(REMOTE_DIR)"
 	$(SCP) Dockerfile Dockerfile.web docker-compose.yml torrents.txt go.mod go.sum $(REMOTE):$(REMOTE_DIR)/
-	$(SCP) -r pkg cmd $(REMOTE):$(REMOTE_DIR)/
+	$(SCP) -r pkg cmd nginx $(REMOTE):$(REMOTE_DIR)/
 	$(SCP) prod.env $(REMOTE):$(REMOTE_DIR)/.env
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose down || true && docker-compose build --no-cache && docker-compose up -d"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose down || true && sudo docker-compose build --no-cache && sudo docker-compose up -d"
 
 deploy-setup:
 	$(SSH) "mkdir -p $(REMOTE_DIR) && apt-get update && apt-get install -y docker.io docker-compose"
@@ -76,22 +76,22 @@ deploy-configure-docker:
 	$(SSH) "systemctl daemon-reload && systemctl restart docker"
 
 deploy-stop:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose down"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose down"
 
 deploy-prune:
 	$(SSH) "docker system prune -a -f && docker volume prune -a -f"
 
 deploy-logs:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose logs -f"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose logs -f"
 
 deploy-status:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose ps"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose ps"
 
 deploy-run-once:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose run --rm trtg"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose run --rm trtg"
 
 deploy-clean:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose down -v && rm -rf $(REMOTE_DIR)"
+	$(SSH) "cd $(REMOTE_DIR) && sudo docker-compose down -v && rm -rf $(REMOTE_DIR)"
 
 # Show help
 help:

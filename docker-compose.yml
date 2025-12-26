@@ -88,6 +88,17 @@ services:
     network_mode: host
     restart: unless-stopped
 
+  nginx:
+    image: nginx:alpine
+    container_name: trtg-nginx
+    depends_on:
+      - trtg-web
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    network_mode: host
+    restart: unless-stopped
+
 volumes:
   telegram-bot-api-data:
   postgres-data:

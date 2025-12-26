@@ -19,15 +19,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rusik69/yttg/pkg/database"
-	"github.com/rusik69/yttg/pkg/telegram"
+	"github.com/rusik69/trtg/pkg/database"
+	"github.com/rusik69/trtg/pkg/telegram"
 )
 
 // Server handles HTTP requests for the web interface
 type Server struct {
 	db             *database.DB
 	downloadDir    string
-	yttgAPIURL     string // URL for yttg download API (fallback)
+	trtgAPIURL     string // URL for trtg download API (fallback)
 	downloader     *telegram.Downloader
 	mux            *http.ServeMux
 	username       string
@@ -40,7 +40,7 @@ type Server struct {
 }
 
 // NewServer creates a new web server
-func NewServer(db *database.DB, downloadDir, yttgAPIURL, username, password, telegramToken string, telegramChatID int64, telegramAPIURL string) *Server {
+func NewServer(db *database.DB, downloadDir, trtgAPIURL, username, password, telegramToken string, telegramChatID int64, telegramAPIURL string) *Server {
 	var downloader *telegram.Downloader
 	if telegramToken != "" && telegramAPIURL != "" {
 		var err error
@@ -55,7 +55,7 @@ func NewServer(db *database.DB, downloadDir, yttgAPIURL, username, password, tel
 	s := &Server{
 		db:          db,
 		downloadDir: downloadDir,
-		yttgAPIURL:  yttgAPIURL,
+		trtgAPIURL:  trtgAPIURL,
 		downloader:  downloader,
 		mux:         http.NewServeMux(),
 		username:    username,
@@ -64,7 +64,7 @@ func NewServer(db *database.DB, downloadDir, yttgAPIURL, username, password, tel
 		token:       telegramToken,
 	}
 
-	log.Printf("Initializing web server with yttg API URL: %s", yttgAPIURL)
+	log.Printf("Initializing web server with trtg API URL: %s", trtgAPIURL)
 
 	// Ensure download directory exists (for any temporary files if needed)
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
@@ -262,7 +262,7 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 			player.appendChild(statusMsg);
 			player.classList.add('active');
 			
-			// Stream directly from yttg (which handles downloads on-demand)
+			// Stream directly from trtg (which handles downloads on-demand)
 			const streamUrl = '/api/stream/' + videoId;
 			console.log('Starting stream from:', streamUrl);
 			
@@ -297,7 +297,7 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 				});
 			};
 			
-			// Set the source and load (yttg will download on-demand)
+			// Set the source and load (trtg will download on-demand)
 			video.src = streamUrl;
 			video.load();
 		}
@@ -442,7 +442,7 @@ func (s *Server) handleAPIChannel(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleAPIStream proxies video streaming requests to yttg download API
+// handleAPIStream proxies video streaming requests to trtg download API
 func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/stream/")
 	if videoIDStr == "" {
@@ -526,9 +526,9 @@ func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No downloader configured - fall back to yttg proxy as last resort
-	targetURL := fmt.Sprintf("%s/download/%d", strings.TrimSuffix(s.yttgAPIURL, "/"), videoID)
-	log.Printf("No downloader configured, proxying stream request for video %d to yttg: %s", videoID, targetURL)
+	// No downloader configured - fall back to trtg proxy as last resort
+	targetURL := fmt.Sprintf("%s/download/%d", strings.TrimSuffix(s.trtgAPIURL, "/"), videoID)
+	log.Printf("No downloader configured, proxying stream request for video %d to trtg: %s", videoID, targetURL)
 
 	// Create request
 	req, err := http.NewRequest(r.Method, targetURL, nil)
@@ -570,7 +570,7 @@ func (s *Server) handleAPIStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAPIStatus checks if a video is ready for streaming (yttg handles downloads on-demand)
+// handleAPIStatus checks if a video is ready for streaming (trtg handles downloads on-demand)
 func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/status/")
 	if videoIDStr == "" {
@@ -609,7 +609,7 @@ func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// yttg handles downloads on-demand, so we can always return ready
+	// trtg handles downloads on-demand, so we can always return ready
 	// The actual download will happen when streaming starts
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ready",

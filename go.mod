@@ -1,4 +1,4 @@
-module github.com/rusik69/yttg
+module github.com/rusik69/trtg
 
 go 1.23
 

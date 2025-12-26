@@ -2,19 +2,19 @@
 
 REMOTE_HOST := hetzner.govno2.cloud
 REMOTE_USER := root
-REMOTE_DIR := /opt/yttg
+REMOTE_DIR := /opt/trtg
 REMOTE := $(REMOTE_USER)@$(REMOTE_HOST)
 SSH := ssh -6 $(REMOTE)
 SCP := scp -6
 
 build:
-	go build -o bin/yttg ./cmd/yttg
+	go build -o bin/trtg ./cmd/trtg
 
 run: build
-	./bin/yttg
+	./bin/trtg
 
 dry-run: build
-	./bin/yttg --dry-run
+	./bin/trtg --dry-run
 
 deps:
 	go mod download && go mod tidy
@@ -30,15 +30,15 @@ lint:
 
 
 docker-build:
-	docker build -t yttg .
+	docker build -t trtg .
 
 docker-build-web:
-	docker build -f Dockerfile.web -t yttg-web .
+	docker build -f Dockerfile.web -t trtg-web .
 
 docker-run:
 	docker-compose up -d telegram-bot-api
 	@sleep 5
-	docker-compose run --rm yttg
+	docker-compose run --rm trtg
 
 docker-up:
 	docker-compose up -d
@@ -88,7 +88,7 @@ deploy-status:
 	$(SSH) "cd $(REMOTE_DIR) && docker-compose ps"
 
 deploy-run-once:
-	$(SSH) "cd $(REMOTE_DIR) && docker-compose run --rm yttg"
+	$(SSH) "cd $(REMOTE_DIR) && docker-compose run --rm trtg"
 
 deploy-clean:
 	$(SSH) "cd $(REMOTE_DIR) && docker-compose down -v && rm -rf $(REMOTE_DIR)"
@@ -107,8 +107,8 @@ help:
 	@echo "  lint               - Run linter"
 	@echo ""
 	@echo "Docker commands:"
-	@echo "  docker-build       - Build Docker image for yttg"
-	@echo "  docker-build-web   - Build Docker image for yttg-web"
+	@echo "  docker-build       - Build Docker image for trtg"
+	@echo "  docker-build-web   - Build Docker image for trtg-web"
 	@echo "  docker-run         - Run with docker-compose"
 	@echo "  docker-up          - Start all services in background"
 	@echo "  docker-stop        - Stop all services"
@@ -124,7 +124,7 @@ help:
 	@echo "  deploy-prune       - Prune Docker system and volumes on server"
 	@echo "  deploy-logs        - Show logs from server"
 	@echo "  deploy-status      - Show service status"
-	@echo "  deploy-run-once    - Run yttg once on server"
+	@echo "  deploy-run-once    - Run trtg once on server"
 	@echo "  deploy-clean       - Remove everything from server"
 	@echo ""
 	@echo "Environment variables:"

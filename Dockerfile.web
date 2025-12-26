@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o yttg-web ./cmd/yttg-web
+RUN CGO_ENABLED=0 GOOS=linux go build -o trtg-web ./cmd/trtg-web
 
 # Runtime stage
 FROM ubuntu:24.04
@@ -20,16 +20,16 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=builder /app/yttg-web .
+COPY --from=builder /app/trtg-web .
 
 RUN mkdir -p /app/downloads /app/data
 
 VOLUME ["/app/downloads", "/app/data"]
 
-ENV DATABASE_PATH=/app/data/yttg.db
+ENV DATABASE_PATH=/app/data/trtg.db
 ENV DOWNLOAD_DIR=/app/downloads
 ENV PORT=8080
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/yttg-web"]
+ENTRYPOINT ["/app/trtg-web"]

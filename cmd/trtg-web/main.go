@@ -1,4 +1,4 @@
-// Package main provides the entry point for the yttg-web web interface
+// Package main provides the entry point for the trtg-web web interface
 package main
 
 import (
@@ -6,9 +6,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/rusik69/yttg/pkg/config"
-	"github.com/rusik69/yttg/pkg/database"
-	"github.com/rusik69/yttg/pkg/web"
+	"github.com/rusik69/trtg/pkg/config"
+	"github.com/rusik69/trtg/pkg/database"
+	"github.com/rusik69/trtg/pkg/web"
 )
 
 func main() {
@@ -17,7 +17,7 @@ func main() {
 	downloadDir := flag.String("download-dir", "", "Download directory for videos (overrides DOWNLOAD_DIR env)")
 	flag.Parse()
 
-	// Web interface no longer needs Telegram credentials - it uses yttg API instead
+	// Web interface no longer needs Telegram credentials - it uses trtg API instead
 	cfg, err := config.NewConfig(true) // Skip Telegram credentials
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
@@ -39,7 +39,7 @@ func main() {
 	defer db.Close()
 
 	// Initialize web server
-	server := web.NewServer(db, cfg.DownloadDir, cfg.YTTGAPIURL, cfg.WebUsername, cfg.WebPassword, cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPIURL)
+	server := web.NewServer(db, cfg.DownloadDir, cfg.TRTGAPIURL, cfg.WebUsername, cfg.WebPassword, cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPIURL)
 
 	log.Printf("Starting web server on port %s", *port)
 	if err := http.ListenAndServe(":"+*port, server); err != nil {

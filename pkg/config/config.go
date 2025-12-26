@@ -18,7 +18,7 @@ type Config struct {
 	TelegramAPIURL string
 	WebUsername    string
 	WebPassword    string
-	YTTGAPIURL     string // URL for yttg download API
+	TRTGAPIURL     string // URL for trtg download API
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -55,7 +55,7 @@ func NewConfig(skipTelegram bool) (*Config, error) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		// Default PostgreSQL connection string (use 127.0.0.1 for IPv4 when using network_mode: host)
-		dbURL = "postgres://yttg:yttg@127.0.0.1:5432/yttg?sslmode=disable"
+		dbURL = "postgres://trtg:trtg@127.0.0.1:5432/trtg?sslmode=disable"
 	}
 
 	downloadDir := os.Getenv("DOWNLOAD_DIR")
@@ -73,9 +73,9 @@ func NewConfig(skipTelegram bool) (*Config, error) {
 		webPassword = "admin" // Default password (should be changed!)
 	}
 
-	yttgAPIURL := os.Getenv("YTTG_API_URL")
-	if yttgAPIURL == "" {
-		yttgAPIURL = "http://localhost:8082" // Default yttg download API URL
+	trtgAPIURL := os.Getenv("TRTG_API_URL")
+	if trtgAPIURL == "" {
+		trtgAPIURL = "http://localhost:8082" // Default trtg download API URL
 	}
 
 	return &Config{
@@ -87,7 +87,7 @@ func NewConfig(skipTelegram bool) (*Config, error) {
 		TelegramAPIURL: apiURL,
 		WebUsername:    webUsername,
 		WebPassword:    webPassword,
-		YTTGAPIURL:     yttgAPIURL,
+		TRTGAPIURL:     trtgAPIURL,
 	}, nil
 }
 

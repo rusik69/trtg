@@ -11,8 +11,8 @@ Test the application without actually downloading or uploading anything:
 make dry-run
 
 # Or manually:
-go build -o bin/yttg .
-./bin/yttg --dry-run
+go build -o bin/trtg .
+./bin/trtg --dry-run
 ```
 
 This will:
@@ -82,7 +82,7 @@ Use a well-seeded, small test torrent:
 
 4. **Run once** (if using `restart: "no"`):
    ```bash
-   docker-compose run --rm yttg
+   docker-compose run --rm trtg
    ```
 
 ### 4. Test Database Tracking
@@ -92,13 +92,15 @@ Verify that already-downloaded torrents are skipped:
 1. **Run once** to download a torrent
 2. **Run again** - it should skip the already-downloaded torrent:
    ```bash
-   ./bin/yttg
+   ./bin/trtg
    # Should show: "Skipping already downloaded torrent: ..."
    ```
 
 3. **Check database**:
    ```bash
-   sqlite3 yttg.db "SELECT * FROM videos;"
+   docker exec -it trtg-postgres psql -U trtg -d trtg -c "SELECT * FROM videos;"
+   # Or if running locally:
+   # psql postgres://trtg:trtg@127.0.0.1:5432/trtg -c "SELECT * FROM videos;"
    ```
 
 ### 5. Test File Size Limits
@@ -116,33 +118,36 @@ Test that files larger than 2GB are skipped:
 
 ### Scenario 1: First Run (Empty Database)
 ```bash
-# Clean start
-rm -f yttg.db
-./bin/yttg --dry-run  # Preview
-./bin/yttg             # Actual run
+# Clean start - truncate tables
+docker exec -it trtg-postgres psql -U trtg -d trtg -c "TRUNCATE videos, channels CASCADE;"
+# Or restart with fresh database
+docker-compose down -v && docker-compose up -d
+
+./bin/trtg --dry-run  # Preview
+./bin/trtg             # Actual run
 ```
 
 ### Scenario 2: Duplicate Detection
 ```bash
 # Run twice
-./bin/yttg
-./bin/yttg  # Should skip already downloaded
+./bin/trtg
+./bin/trtg  # Should skip already downloaded
 ```
 
 ### Scenario 3: Multiple Files in Torrent
 ```bash
 # Use a torrent with multiple files
 # All files should be uploaded separately
-./bin/yttg
+./bin/trtg
 ```
 
 ### Scenario 4: Cleanup After Upload
 ```bash
 # Run with cleanup enabled (default)
-./bin/yttg --cleanup
+./bin/trtg --cleanup
 
 # Run with cleanup disabled
-./bin/yttg --cleanup=false
+./bin/trtg --cleanup=false
 ```
 
 ## Finding Test Torrents
@@ -177,7 +182,7 @@ After running, verify:
 - [ ] Torrent metadata fetched successfully
 - [ ] Files downloaded to `downloads/` directory
 - [ ] Files uploaded to Telegram (check your chat)
-- [ ] Database entry created (`yttg.db`)
+- [ ] Database entry created in PostgreSQL
 - [ ] Files cleaned up (if `--cleanup` enabled)
 - [ ] Duplicate torrents are skipped on second run
 
@@ -195,15 +200,16 @@ After running, verify:
 - Start a conversation with your bot first
 
 ### Database issues:
-- Check if `yttg.db` is writable
-- Verify SQLite is working: `sqlite3 yttg.db ".tables"`
+- Verify PostgreSQL container is running: `docker ps | grep trtg-postgres`
+- Check PostgreSQL connection: `docker exec -it trtg-postgres psql -U trtg -d trtg -c "\dt"`
+- Check PostgreSQL logs: `docker logs trtg-postgres`
 
 ## Debug Mode
 
 For more verbose output, check the logs:
 ```bash
 # Docker logs
-docker-compose logs -f yttg
+docker-compose logs -f trtg
 
 # Or add debug logging to code
 ```
@@ -215,18 +221,18 @@ docker-compose logs -f yttg
 # quick-test.sh
 
 echo "1. Testing dry-run..."
-./bin/yttg --dry-run
+./bin/trtg --dry-run
 
 echo ""
 echo "2. Testing with small torrent..."
 # Add a small test torrent to torrents.txt first
-./bin/yttg --cleanup=false
+./bin/trtg --cleanup=false
 
 echo ""
 echo "3. Testing duplicate detection..."
-./bin/yttg  # Should skip
+./bin/trtg  # Should skip
 
 echo ""
 echo "4. Checking database..."
-sqlite3 yttg.db "SELECT video_id, title, uploaded_at FROM videos;"
+docker exec -it trtg-postgres psql -U trtg -d trtg -c "SELECT video_id, title, uploaded_at FROM videos;"
 ```

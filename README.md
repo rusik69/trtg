@@ -1,4 +1,4 @@
-# YTTG - Torrent to Telegram
+# TRTG - Torrent to Telegram
 
 A Go application that downloads files from torrents (magnet links or .torrent files) and uploads them to Telegram using Local Bot API Server (supports up to 2GB files).
 
@@ -8,7 +8,7 @@ A Go application that downloads files from torrents (magnet links or .torrent fi
 - Downloads torrents sequentially using anacrolix/torrent library
 - **Supports up to 2GB files** via Local Bot API Server
 - Uploads files to Telegram as documents
-- Tracks downloaded torrents in a local SQLite database to avoid duplicates
+- Tracks downloaded torrents in PostgreSQL database to avoid duplicates
 - Supports dry-run mode to preview which torrents would be downloaded
 - Automatic cleanup of downloaded files after successful upload
 - Docker support with easy deployment
@@ -79,7 +79,7 @@ make deploy-clean    # Remove from server
 | `TELEGRAM_API_ID` | API ID from my.telegram.org | For Local API |
 | `TELEGRAM_API_HASH` | API Hash from my.telegram.org | For Local API |
 | `TORRENTS_FILE` | Path to torrents file | No (default: torrents.txt) |
-| `DATABASE_PATH` | Path to SQLite database | No (default: yttg.db) |
+| `DATABASE_URL` | PostgreSQL connection URL | No (default: postgres://trtg:trtg@127.0.0.1:5432/trtg?sslmode=disable) |
 | `DOWNLOAD_DIR` | Download directory | No (default: downloads) |
 
 ### Files
@@ -110,7 +110,7 @@ magnet:?xt=urn:btih:...
 
 ```
 -torrents string    Path to torrents file
--db string          Path to SQLite database
+-db string          PostgreSQL connection URL
 -download-dir       Download directory
 -dry-run            Preview without downloading
 -cleanup            Delete files after upload (default true)

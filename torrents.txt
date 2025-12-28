@@ -1,0 +1,7 @@
+# Torrent files or magnet links to download
+# One per line
+# Lines starting with # are comments
+
+# Example:
+# magnet:?xt=urn:btih:...
+# /path/to/file.torrent

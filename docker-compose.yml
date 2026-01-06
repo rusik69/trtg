@@ -11,6 +11,7 @@ services:
       - POSTGRES_HOST_AUTH_METHOD=md5
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./backups:/backups
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U trtg -h 127.0.0.1"]
@@ -19,6 +20,35 @@ services:
       retries: 5
     network_mode: host
     command: postgres -c listen_addresses=127.0.0.1
+
+  postgres-backup:
+    image: postgres:16-alpine
+    container_name: trtg-postgres-backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_USER=trtg
+      - POSTGRES_PASSWORD=trtg
+      - POSTGRES_DB=trtg
+      - POSTGRES_HOST=127.0.0.1
+      - BACKUP_KEEP_DAYS=1
+    volumes:
+      - ./backups:/backups
+      - ./scripts/backup.sh:/backup.sh:ro
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache dcron
+        chmod +x /backup.sh
+        # Run backup immediately on startup
+        /backup.sh
+        # Setup cron job to run every hour
+        echo "0 * * * * /backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        # Start cron in foreground
+        crond -f -l 2
 
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
@@ -52,6 +82,7 @@ services:
       - DATABASE_URL=postgres://trtg:trtg@127.0.0.1:5432/trtg?sslmode=disable
       - DOWNLOAD_DIR=/app/downloads
       - HTTP_PORT=${HTTP_PORT:-8082}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ./torrents.txt:/app/torrents.txt:ro
       - trtg-downloads:/app/downloads
@@ -82,9 +113,10 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - TELEGRAM_API_URL=http://localhost:8081
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - trtg-downloads:/app/downloads
-      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
     network_mode: host
     restart: unless-stopped
 

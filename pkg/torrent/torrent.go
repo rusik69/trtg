@@ -389,8 +389,17 @@ func (d *Downloader) GetTorrentInfo(torrentURL string) (string, int64, []FileInf
 		}
 	}
 
-	// Wait for metadata
-	<-t.GotInfo()
+	// Wait for metadata with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	select {
+	case <-t.GotInfo():
+		// Metadata received successfully
+	case <-ctx.Done():
+		t.Drop()
+		return "", 0, nil, fmt.Errorf("timeout waiting for torrent metadata (5 minutes)")
+	}
 
 	name := t.Name()
 	totalSize := t.Info().TotalLength()

@@ -11,12 +11,9 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o trtg ./cmd/trtg
 
 # Runtime stage
-FROM ubuntu:24.04
+FROM alpine:latest
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 

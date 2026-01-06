@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/rusik69/trtg/pkg/cleanup"
 	"github.com/rusik69/trtg/pkg/config"
 	"github.com/rusik69/trtg/pkg/database"
 	"github.com/rusik69/trtg/pkg/web"
@@ -40,6 +41,12 @@ func main() {
 
 	// Initialize web server
 	server := web.NewServer(db, cfg.DownloadDir, cfg.TRTGAPIURL, cfg.WebUsername, cfg.WebPassword, cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPIURL)
+
+	// Start cleanup service for telegram-bot-api storage
+	// Scans /var/lib/telegram-bot-api and cleans up old files to keep storage under limits
+	cleanupSvc := cleanup.NewService("/var/lib/telegram-bot-api")
+	cleanupSvc.Start()
+	log.Printf("Started telegram-bot-api storage cleanup service (max: %d GB, %d files)", cleanup.MaxStorageGB, cleanup.MaxFiles)
 
 	log.Printf("Starting web server on port %s", *port)
 	if err := http.ListenAndServe(":"+*port, server); err != nil {

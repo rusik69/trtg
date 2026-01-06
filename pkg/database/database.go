@@ -22,6 +22,9 @@ type Video struct {
 	UploadedAt       *time.Time
 	TelegramFileID   string // Telegram file ID for downloading
 	TelegramFilePath string // Telegram file path for downloading (for large files)
+	ShowName         string // Parsed show name
+	SeasonNumber     int    // Season number (0 for specials/unknown)
+	EpisodeNumber    int    // Episode number (0 if unknown)
 }
 
 // DB wraps the PostgreSQL database connection
@@ -103,6 +106,15 @@ func (db *DB) initSchema() error {
 	// Add telegram_file_path column if it doesn't exist (for large files)
 	_, _ = db.conn.Exec("ALTER TABLE videos ADD COLUMN IF NOT EXISTS telegram_file_path TEXT")
 
+	// Add season-related columns if they don't exist
+	_, _ = db.conn.Exec("ALTER TABLE videos ADD COLUMN IF NOT EXISTS show_name TEXT")
+	_, _ = db.conn.Exec("ALTER TABLE videos ADD COLUMN IF NOT EXISTS season_number INTEGER DEFAULT 0")
+	_, _ = db.conn.Exec("ALTER TABLE videos ADD COLUMN IF NOT EXISTS episode_number INTEGER DEFAULT 0")
+
+	// Create indexes for season queries
+	_, _ = db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_show_name ON videos(show_name)")
+	_, _ = db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_videos_season ON videos(show_name, season_number)")
+
 	// Migrate existing VARCHAR(255) columns to TEXT if they exist
 	migrations := []string{
 		"ALTER TABLE videos ALTER COLUMN video_id TYPE TEXT",
@@ -152,10 +164,10 @@ func (db *DB) IsVideoDownloaded(videoID, filePath string) (bool, error) {
 
 // AddVideo adds a new file/torrent record to the database
 // If the video already exists (duplicate key), it's not an error - just skip
-func (db *DB) AddVideo(videoID, channelURL, title, filePath string) error {
+func (db *DB) AddVideo(videoID, channelURL, title, filePath, showName string, seasonNumber, episodeNumber int) error {
 	_, err := db.conn.Exec(
-		"INSERT INTO videos (video_id, channel_url, title, file_path, downloaded_at) VALUES ($1, $2, $3, $4, $5)",
-		videoID, channelURL, title, filePath, time.Now(),
+		"INSERT INTO videos (video_id, channel_url, title, file_path, downloaded_at, show_name, season_number, episode_number) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+		videoID, channelURL, title, filePath, time.Now(), showName, seasonNumber, episodeNumber,
 	)
 	if err != nil {
 		// Check if it's a duplicate key error (UNIQUE constraint violation)
@@ -243,7 +255,7 @@ func (db *DB) GetPendingUploads() ([]Video, error) {
 // GetAllVideos returns all downloaded files/torrents
 func (db *DB) GetAllVideos() ([]Video, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path FROM videos ORDER BY downloaded_at DESC",
+		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path, COALESCE(show_name, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0) FROM videos ORDER BY downloaded_at DESC",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query files: %w", err)
@@ -256,7 +268,7 @@ func (db *DB) GetAllVideos() ([]Video, error) {
 		var uploadedAt sql.NullTime
 		var telegramFileID sql.NullString
 		var telegramFilePath sql.NullString
-		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath); err != nil {
+		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath, &v.ShowName, &v.SeasonNumber, &v.EpisodeNumber); err != nil {
 			return nil, fmt.Errorf("failed to scan file row: %w", err)
 		}
 		if uploadedAt.Valid {
@@ -282,9 +294,9 @@ func (db *DB) GetVideoByID(id int64) (*Video, error) {
 	var telegramFilePath sql.NullString
 
 	err := db.conn.QueryRow(
-		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path FROM videos WHERE id = $1",
+		"SELECT id, video_id, channel_url, title, file_path, downloaded_at, uploaded_at, telegram_file_id, telegram_file_path, COALESCE(show_name, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0) FROM videos WHERE id = $1",
 		id,
-	).Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath)
+	).Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath, &v.ShowName, &v.SeasonNumber, &v.EpisodeNumber)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -304,4 +316,139 @@ func (db *DB) GetVideoByID(id int64) (*Video, error) {
 	}
 
 	return &v, nil
+}
+
+// Show represents a TV show with its season count
+type Show struct {
+	Name         string `json:"name"`
+	SeasonCount  int    `json:"seasonCount"`
+	EpisodeCount int    `json:"episodeCount"`
+}
+
+// Season represents a season with episode count
+type Season struct {
+	SeasonNumber int `json:"seasonNumber"`
+	EpisodeCount int `json:"episodeCount"`
+}
+
+// GetAllShows returns all unique shows with their season and episode counts
+// Groups by show_name (parsed from torrents), falling back to title if show_name is not available
+func (db *DB) GetAllShows() ([]Show, error) {
+	rows, err := db.conn.Query(`
+		SELECT
+			COALESCE(NULLIF(show_name, ''), title) as show_name,
+			COUNT(DISTINCT season_number) as season_count,
+			COUNT(*) as episode_count
+		FROM videos
+		WHERE uploaded_at IS NOT NULL
+		GROUP BY COALESCE(NULLIF(show_name, ''), title)
+		ORDER BY show_name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query shows: %w", err)
+	}
+	defer rows.Close()
+
+	var shows []Show
+	for rows.Next() {
+		var s Show
+		if err := rows.Scan(&s.Name, &s.SeasonCount, &s.EpisodeCount); err != nil {
+			return nil, fmt.Errorf("failed to scan show row: %w", err)
+		}
+		shows = append(shows, s)
+	}
+
+	return shows, rows.Err()
+}
+
+// GetSeasonsByShow returns all seasons for a specific show
+func (db *DB) GetSeasonsByShow(showName string) ([]Season, error) {
+	rows, err := db.conn.Query(`
+		SELECT
+			season_number,
+			COUNT(*) as episode_count
+		FROM videos
+		WHERE COALESCE(NULLIF(show_name, ''), title) = $1
+		GROUP BY season_number
+		ORDER BY season_number
+	`, showName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query seasons: %w", err)
+	}
+	defer rows.Close()
+
+	var seasons []Season
+	for rows.Next() {
+		var s Season
+		if err := rows.Scan(&s.SeasonNumber, &s.EpisodeCount); err != nil {
+			return nil, fmt.Errorf("failed to scan season row: %w", err)
+		}
+		seasons = append(seasons, s)
+	}
+
+	return seasons, rows.Err()
+}
+
+// GetEpisodesByShowAndSeason returns all episodes for a specific show and season
+func (db *DB) GetEpisodesByShowAndSeason(showName string, seasonNumber int) ([]Video, error) {
+	rows, err := db.conn.Query(`
+		SELECT
+			id, video_id, channel_url, title, file_path, downloaded_at,
+			uploaded_at, telegram_file_id, telegram_file_path,
+			COALESCE(show_name, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0)
+		FROM videos
+		WHERE COALESCE(NULLIF(show_name, ''), title) = $1 AND season_number = $2
+		ORDER BY episode_number, file_path
+	`, showName, seasonNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query episodes: %w", err)
+	}
+	defer rows.Close()
+
+	var videos []Video
+	for rows.Next() {
+		var v Video
+		var uploadedAt sql.NullTime
+		var telegramFileID sql.NullString
+		var telegramFilePath sql.NullString
+		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelURL, &v.Title, &v.FilePath, &v.DownloadedAt, &uploadedAt, &telegramFileID, &telegramFilePath, &v.ShowName, &v.SeasonNumber, &v.EpisodeNumber); err != nil {
+			return nil, fmt.Errorf("failed to scan episode row: %w", err)
+		}
+		if uploadedAt.Valid {
+			v.UploadedAt = &uploadedAt.Time
+		}
+		if telegramFileID.Valid {
+			v.TelegramFileID = telegramFileID.String
+		}
+		if telegramFilePath.Valid {
+			v.TelegramFilePath = telegramFilePath.String
+		}
+		videos = append(videos, v)
+	}
+
+	return videos, rows.Err()
+}
+
+// UpdateVideoInfo updates the show name, season, and episode information for a video
+func (db *DB) UpdateVideoInfo(id int64, showName string, seasonNumber, episodeNumber int) error {
+	_, err := db.conn.Exec(
+		"UPDATE videos SET show_name = $1, season_number = $2, episode_number = $3 WHERE id = $4",
+		showName, seasonNumber, episodeNumber, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update video info: %w", err)
+	}
+	return nil
+}
+
+// UpdateVideoTelegramInfo updates the Telegram file ID and path for a video by ID
+func (db *DB) UpdateVideoTelegramInfo(id int64, telegramFileID, telegramFilePath string) error {
+	_, err := db.conn.Exec(
+		"UPDATE videos SET telegram_file_id = $1, telegram_file_path = $2 WHERE id = $3",
+		telegramFileID, telegramFilePath, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update video Telegram info: %w", err)
+	}
+	return nil
 }

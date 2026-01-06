@@ -13,9 +13,9 @@ import (
 
 const (
 	// MaxStorageGB is the maximum storage size in GB before cleanup triggers
-	MaxStorageGB = 1
+	MaxStorageGB = 2
 	// MaxFiles is the maximum number of files to keep
-	MaxFiles = 1
+	MaxFiles = 5
 	// CleanupIntervalMinutes is how often to run cleanup
 	CleanupIntervalMinutes = 2
 )
@@ -158,11 +158,9 @@ func (s *Service) scanFiles() ([]FileInfo, error) {
 			return nil
 		}
 
-		// Skip non-video files (we only cache video files)
-		ext := filepath.Ext(path)
-		if ext != ".mp4" && ext != ".mkv" && ext != ".avi" && ext != ".mov" {
-			return nil
-		}
+		// Scan all files (including temp files, partial uploads, etc.)
+		// Note: This includes video files (.mp4, .mkv, .avi, .mov) and
+		// temporary upload files in the temp/ directory
 
 		info, err := d.Info()
 		if err != nil {

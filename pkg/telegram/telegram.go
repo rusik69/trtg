@@ -77,8 +77,9 @@ func (u *Uploader) UploadVideo(filePath, title string) error {
 
 // UploadResult contains both file ID and file path from upload
 type UploadResult struct {
-	FileID   string
-	FilePath string // File path on Telegram server (for Local Bot API)
+	FileID    string
+	FilePath  string // File path on Telegram server (for Local Bot API)
+	MessageID int    // Telegram message ID for deleting messages
 }
 
 // UploadDocument uploads a file as document to Telegram and returns the file ID and path
@@ -123,7 +124,8 @@ func (u *Uploader) UploadDocumentWithPath(filePath, title string) (*UploadResult
 	// Extract file ID from the message
 	if msg.Document != nil {
 		result := &UploadResult{
-			FileID: msg.Document.FileID,
+			FileID:    msg.Document.FileID,
+			MessageID: msg.MessageID,
 		}
 
 		// Try to get the file path for the uploaded document
@@ -135,7 +137,7 @@ func (u *Uploader) UploadDocumentWithPath(filePath, title string) (*UploadResult
 			log.Printf("File will still be accessible via Telegram cloud, but local path download may fail")
 		} else {
 			result.FilePath = filePath
-			log.Printf("File uploaded successfully with FileID: %s and FilePath: %s", result.FileID, result.FilePath)
+			log.Printf("File uploaded successfully with FileID: %s, FilePath: %s, MessageID: %d", result.FileID, result.FilePath, result.MessageID)
 		}
 
 		return result, nil
@@ -149,6 +151,16 @@ func (u *Uploader) SendMessage(text string) error {
 	msg := tgbotapi.NewMessage(u.chatID, text)
 	_, err := u.bot.Send(msg)
 	return err
+}
+
+// DeleteMessage deletes a message from Telegram by message ID
+func (u *Uploader) DeleteMessage(messageID int) error {
+	deleteMsg := tgbotapi.NewDeleteMessage(u.chatID, messageID)
+	_, err := u.bot.Send(deleteMsg)
+	if err != nil {
+		return fmt.Errorf("failed to delete message %d: %w", messageID, err)
+	}
+	return nil
 }
 
 // GetMe returns information about the bot

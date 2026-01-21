@@ -39,6 +39,8 @@ type Server struct {
 	currentVideo   int64 // Track currently playing video for cleanup
 	currentVideoMu sync.Mutex
 	token          string // Telegram bot token for local file access
+	chatID         int64  // Telegram chat ID
+	apiURL         string // Telegram API URL
 }
 
 // NewServer creates a new web server
@@ -64,6 +66,8 @@ func NewServer(db *database.DB, downloadDir, trtgAPIURL, username, password, tel
 		password:    password,
 		sessions:    make(map[string]time.Time),
 		token:       telegramToken,
+		chatID:      telegramChatID,
+		apiURL:      telegramAPIURL,
 	}
 
 	log.Printf("Initializing web server with trtg API URL: %s", trtgAPIURL)
@@ -83,6 +87,8 @@ func NewServer(db *database.DB, downloadDir, trtgAPIURL, username, password, tel
 	s.mux.HandleFunc("/api/channel/", s.requireAuth(s.handleAPIChannel))
 	s.mux.HandleFunc("/api/shows", s.requireAuth(s.handleAPIShows))
 	s.mux.HandleFunc("/api/show/", s.requireAuth(s.handleAPIShow))
+	s.mux.HandleFunc("/api/episode/", s.requireAuth(s.handleAPIDeleteEpisode))
+	s.mux.HandleFunc("/api/move-to-extras/", s.requireAuth(s.handleAPIMoveToExtras))
 	s.mux.HandleFunc("/api/stream/", s.requireAuth(s.handleAPIStream))
 	s.mux.HandleFunc("/api/status/", s.requireAuth(s.handleAPIStatus))
 	s.mux.HandleFunc("/static/", s.handleStatic)
@@ -434,6 +440,12 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 		.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; }
 		.logout-btn { background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
 		.logout-btn:hover { background: #c82333; }
+		.move-to-extras-btn { background: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-left: 10px; }
+		.move-to-extras-btn:hover { background: #fb8c00; }
+		.move-to-extras-btn:disabled { background: #555; cursor: not-allowed; }
+		.delete-show-btn { background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-left: 10px; }
+		.delete-show-btn:hover { background: #c82333; }
+		.delete-show-btn:disabled { background: #555; cursor: not-allowed; }
 		.back-link { color: #4a9eff; text-decoration: none; margin-bottom: 20px; display: inline-block; }
 		h1 { margin-bottom: 10px; }
 		.seasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
@@ -450,13 +462,68 @@ func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
 				<a href="/" class="back-link">← Back to Shows</a>
 				<h1 id="showName"></h1>
 			</div>
-			<a href="/logout" class="logout-btn">Logout</a>
+			<div>
+				<button class="move-to-extras-btn" onclick="moveToExtras()">Move Episodes Without Numbers to Extras</button>
+				<button class="delete-show-btn" onclick="deleteShow()">Delete Show</button>
+				<a href="/logout" class="logout-btn">Logout</a>
+			</div>
 		</div>
 		<div class="seasons" id="seasons"></div>
 	</div>
 	<script>
 		const showName = decodeURIComponent('{{.ShowName}}');
 		document.getElementById('showName').textContent = showName;
+
+		function moveToExtras() {
+			if (!confirm('Move all episodes without episode numbers to Extras (Season 0)? This will affect episodes that don\'t have proper episode numbers.')) {
+				return;
+			}
+			const btn = document.querySelector('.move-to-extras-btn');
+			btn.disabled = true;
+			btn.textContent = 'Moving...';
+			fetch('/api/move-to-extras/' + encodeURIComponent(showName), { method: 'POST' })
+				.then(r => r.json())
+				.then(data => {
+					if (data.error) {
+						alert('Error: ' + data.error);
+						btn.disabled = false;
+						btn.textContent = 'Move Episodes Without Numbers to Extras';
+					} else {
+						alert('Successfully moved ' + data.episodesMoved + ' episodes to Extras');
+						location.reload();
+					}
+				})
+				.catch(err => {
+					alert('Error: ' + err.message);
+					btn.disabled = false;
+					btn.textContent = 'Move Episodes Without Numbers to Extras';
+				});
+		}
+
+		function deleteShow() {
+			if (!confirm('Are you sure you want to delete the entire show "' + showName + '"? This will remove all episodes from Telegram, local cache, and database.')) {
+				return;
+			}
+			const btn = document.querySelector('.delete-show-btn');
+			btn.disabled = true;
+			btn.textContent = 'Deleting...';
+			fetch('/api/show/' + encodeURIComponent(showName), { method: 'DELETE' })
+				.then(r => r.json())
+				.then(data => {
+					if (data.error) {
+						alert('Error: ' + data.error);
+						btn.disabled = false;
+						btn.textContent = 'Delete Show';
+					} else {
+						window.location.href = '/';
+					}
+				})
+				.catch(err => {
+					alert('Error: ' + err.message);
+					btn.disabled = false;
+					btn.textContent = 'Delete Show';
+				});
+		}
 
 		fetch('/api/show/' + encodeURIComponent(showName))
 			.then(r => r.json())
@@ -504,8 +571,11 @@ func (s *Server) handleSeasonView(w http.ResponseWriter, r *http.Request, showNa
 		.video-card:hover { transform: translateY(-2px); background: #3a3a3a; }
 		.video-title { font-size: 16px; margin-bottom: 10px; }
 		.video-info { color: #aaa; font-size: 12px; margin-bottom: 10px; }
-		.play-btn { background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+		.play-btn { background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 10px; }
 		.play-btn:hover { background: #34ce57; }
+		.delete-btn { background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+		.delete-btn:hover { background: #c82333; }
+		.delete-btn:disabled { background: #555; cursor: not-allowed; }
 		.video-player { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 1000; flex-direction: column; }
 		.video-player.active { display: flex; align-items: center; justify-content: center; }
 		.video-player video { max-width: 100%; max-height: 100%; }
@@ -555,7 +625,8 @@ func (s *Server) handleSeasonView(w http.ResponseWriter, r *http.Request, showNa
 					card.className = 'video-card';
 					const episodeLabel = video.episodeNumber > 0 ? 'E' + video.episodeNumber + ' - ' : '';
 					const playBtn = '<button class="play-btn" onclick="playVideo(' + video.id + ')">Play</button>';
-					card.innerHTML = '<div class="video-title">' + episodeLabel + escapeHtml(video.title) + '</div><div class="video-info">Downloaded: ' + video.downloadedAt + '</div>' + playBtn;
+					const deleteBtn = '<button class="delete-btn" onclick="deleteEpisode(' + video.id + ', this)">Delete</button>';
+					card.innerHTML = '<div class="video-title">' + episodeLabel + escapeHtml(video.title) + '</div><div class="video-info">Downloaded: ' + video.downloadedAt + '</div>' + playBtn + deleteBtn;
 					container.appendChild(card);
 				});
 			});
@@ -654,6 +725,30 @@ func (s *Server) handleSeasonView(w http.ResponseWriter, r *http.Request, showNa
 					audioTracks[i].enabled = (i === selectedIndex);
 				}
 			}
+		}
+
+		function deleteEpisode(videoId, btn) {
+			if (!confirm('Are you sure you want to delete this episode? This will remove it from Telegram, local cache, and database.')) {
+				return;
+			}
+			btn.disabled = true;
+			btn.textContent = 'Deleting...';
+			fetch('/api/episode/' + videoId, { method: 'DELETE' })
+				.then(r => r.json())
+				.then(data => {
+					if (data.error) {
+						alert('Error: ' + data.error);
+						btn.disabled = false;
+						btn.textContent = 'Delete';
+					} else {
+						location.reload();
+					}
+				})
+				.catch(err => {
+					alert('Error: ' + err.message);
+					btn.disabled = false;
+					btn.textContent = 'Delete';
+				});
 		}
 
 		function escapeHtml(text) {
@@ -809,6 +904,7 @@ func (s *Server) handleAPIShows(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPIShow returns seasons for a show or episodes if season is specified
+// Also handles DELETE requests for deleting shows/seasons
 func (s *Server) handleAPIShow(w http.ResponseWriter, r *http.Request) {
 	// Parse URL: /api/show/{showName} or /api/show/{showName}/season/{seasonNumber}
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/show/"), "/")
@@ -825,7 +921,17 @@ func (s *Server) handleAPIShow(w http.ResponseWriter, r *http.Request) {
 	// Check if we're requesting a specific season
 	if len(pathParts) >= 3 && pathParts[1] == "season" {
 		seasonNum, _ := strconv.Atoi(pathParts[2])
+		if r.Method == "DELETE" {
+			s.handleAPIDeleteShow(w, r)
+			return
+		}
 		s.handleAPIEpisodes(w, r, showName, seasonNum)
+		return
+	}
+
+	// Handle DELETE for entire show
+	if r.Method == "DELETE" {
+		s.handleAPIDeleteShow(w, r)
 		return
 	}
 
@@ -1391,4 +1497,167 @@ func (s *Server) transcodeAndServe(w http.ResponseWriter, r *http.Request, input
 
 	// Serve the transcoded file
 	http.ServeFile(w, r, cachedPath)
+}
+
+// handleAPIDeleteEpisode handles deletion of a single episode
+func (s *Server) handleAPIDeleteEpisode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	videoIDStr := strings.TrimPrefix(r.URL.Path, "/api/episode/")
+	if videoIDStr == "" {
+		http.Error(w, "Video ID required", http.StatusBadRequest)
+		return
+	}
+
+	videoID := parseVideoID(videoIDStr)
+	video, err := s.db.DeleteVideo(videoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete video: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete from Telegram if message ID is available
+	if video.TelegramMessageID > 0 && s.token != "" && s.apiURL != "" {
+		uploader, err := telegram.NewUploader(s.token, s.chatID, s.apiURL)
+		if err == nil {
+			if err := uploader.DeleteMessage(video.TelegramMessageID); err != nil {
+				log.Printf("Warning: Failed to delete Telegram message %d: %v", video.TelegramMessageID, err)
+			} else {
+				log.Printf("Deleted Telegram message %d for video %d", video.TelegramMessageID, videoID)
+			}
+		}
+	}
+
+	// Delete from local cache (telegram-bot-api storage)
+	if video.TelegramFilePath != "" && s.token != "" {
+		localPath := filepath.Join("/var/lib/telegram-bot-api", s.token, video.TelegramFilePath)
+		if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Warning: Failed to delete local cache file %s: %v", localPath, err)
+		} else {
+			log.Printf("Deleted local cache file: %s", localPath)
+		}
+	}
+
+	// Delete transcoded cache if exists
+	transcodedPath := filepath.Join(s.downloadDir, fmt.Sprintf("transcoded-%d.mp4", videoID))
+	if err := os.Remove(transcodedPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: Failed to delete transcoded cache file %s: %v", transcodedPath, err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Episode deleted successfully",
+	})
+}
+
+// handleAPIDeleteShow handles deletion of shows or seasons
+func (s *Server) handleAPIDeleteShow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		// If not DELETE, let handleAPIShow handle it
+		s.handleAPIShow(w, r)
+		return
+	}
+
+	// Parse URL: /api/show/{showName} or /api/show/{showName}/season/{seasonNumber}
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/show/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		http.Error(w, "Show name required", http.StatusBadRequest)
+		return
+	}
+
+	showName, err := url.QueryUnescape(pathParts[0])
+	if err != nil {
+		showName = pathParts[0]
+	}
+
+	var videos []database.Video
+
+	// Check if we're deleting a specific season
+	if len(pathParts) >= 3 && pathParts[1] == "season" {
+		seasonNum, _ := strconv.Atoi(pathParts[2])
+		videos, err = s.db.DeleteVideosByShowAndSeason(showName, seasonNum)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete season: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Deleting season %d of show %s (%d episodes)", seasonNum, showName, len(videos))
+	} else {
+		// Delete entire show
+		videos, err = s.db.DeleteVideosByShow(showName)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete show: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Deleting entire show %s (%d episodes)", showName, len(videos))
+	}
+
+	// Delete from Telegram and local cache
+	if s.token != "" && s.apiURL != "" {
+		uploader, err := telegram.NewUploader(s.token, s.chatID, s.apiURL)
+		if err == nil {
+			for _, video := range videos {
+				// Delete from Telegram
+				if video.TelegramMessageID > 0 {
+					if err := uploader.DeleteMessage(video.TelegramMessageID); err != nil {
+						log.Printf("Warning: Failed to delete Telegram message %d: %v", video.TelegramMessageID, err)
+					}
+				}
+
+				// Delete from local cache
+				if video.TelegramFilePath != "" && s.token != "" {
+					localPath := filepath.Join("/var/lib/telegram-bot-api", s.token, video.TelegramFilePath)
+					if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+						log.Printf("Warning: Failed to delete local cache file %s: %v", localPath, err)
+					}
+				}
+
+				// Delete transcoded cache
+				transcodedPath := filepath.Join(s.downloadDir, fmt.Sprintf("transcoded-%d.mp4", video.ID))
+				os.Remove(transcodedPath) // Ignore errors
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Deleted %d episodes", len(videos)),
+		"count":   len(videos),
+	})
+}
+
+// handleAPIMoveToExtras handles moving episodes without episode numbers to season 0 (extras)
+func (s *Server) handleAPIMoveToExtras(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	showNameEncoded := strings.TrimPrefix(r.URL.Path, "/api/move-to-extras/")
+	if showNameEncoded == "" {
+		http.Error(w, "Show name required", http.StatusBadRequest)
+		return
+	}
+
+	showName, err := url.QueryUnescape(showNameEncoded)
+	if err != nil {
+		showName = showNameEncoded
+	}
+
+	rowsAffected, err := s.db.MoveEpisodesWithoutEpisodeNumbersToExtras(showName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to move episodes: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"message":      fmt.Sprintf("Moved %d episodes to extras", rowsAffected),
+		"episodesMoved": rowsAffected,
+	})
 }
